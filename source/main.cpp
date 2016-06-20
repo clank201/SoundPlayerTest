@@ -1,137 +1,114 @@
-#include <3ds.h>
-#include <cstdio>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
 #include "stb_vorbis.h"
+#include <3ds.h>
 
-#include <cstdlib>
-#include <iostream>
-#include <cstring>
-#include <dirent.h>
-#include <string>
-#include <sstream>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <thread>
+u32 Samples;stb_vorbis *vorbisFile = NULL;
+//----------------------------------------------------------------------------
+void fill_buffer(void *audioBuffer, size_t size) {
+//----------------------------------------------------------------------------
 
-using namespace std;
+	u32 *dest = (u32*)audioBuffer;
 
-stb_vorbis *v = NULL;
+	stb_vorbis_get_samples_short_interleaved(vorbisFile, 2, (short*)dest, Samples * 2);
 
-enum {
-   STATE_IDLE,
-   STATE_FC
-};
+	DSP_FlushDataCache(audioBuffer,size);
 
-u32 state = STATE_IDLE;
-char *filename;
-std::string cur_dir = "";
-u32 cursor_pos = 0;
-bool draw_ui = true;
-int error;
-s16 *audiobuf = NULL;
-stb_vorbis_info info;
-u32 Samples;
-u32 audiobuf_size;
-bool loop_flag = false;
-bool paused = false;
-
-std::string currently_playing;
-
-u32 audiobuf_index = 0;
-
-void play_file_from_filename(const std::string name) {
-   currently_playing = std::string(name);
-   if (audiobuf) linearFree(audiobuf);
-
-      v = stb_vorbis_open_filename(name.c_str(), &error, NULL);
-      info = stb_vorbis_get_info(v);
-      Samples = info.sample_rate;
-      audiobuf_size = Samples * sizeof(s16) * 2;
-      audiobuf = (s16*)linearAlloc(audiobuf_size);
-
-   paused = false;
 }
 
-void play_file() {
-   DIR *dir;
-   struct dirent *ent;
-   if ((dir = opendir (cur_dir.c_str())) != NULL) {
+//----------------------------------------------------------------------------
+int main(int argc, char **argv) {
+//----------------------------------------------------------------------------
 
-      u32 cur = 1;
-      while ((ent = readdir (dir)) != NULL) {
-         if (strncmp(ent->d_name, ".", 1) == 0) continue;
-         if (cur == cursor_pos) {
-            if (v) {
-               stb_vorbis_close(v);
-            }
-            std::string name = cur_dir + "/" + ent->d_name;
-            play_file_from_filename(name);
-            closedir (dir);
-            return;
-         }
-         cur++;
-      }
-      closedir (dir);
-   } else {
-      /* could not open directory */
-      perror ("");
-   }
-}
+	PrintConsole topScreen;
+	ndspWaveBuf waveBuf[2];
 
-//void *device = NULL;
+	gfxInitDefault();
 
-int main()
-{
-   // Initialize services
-   srvInit();
-   aptInit();
-   hidInit();
-   //ptmInit();
-   csndInit();
-   gfxInitDefault();
-   // fsInit();
-   // sdmcInit();
-	consoleInit(GFX_BOTTOM, NULL);
-   chdir("sdmc:/");
+	consoleInit(GFX_TOP, &topScreen);
 
-   int frames = 0;
-   int channel = 0x8;
-	play_file_from_filename("/mau5.ogg");
+	consoleSelect(&topScreen);
+
+	printf("libctru streaming audio\n");
 	
-   while (aptMainLoop())
-   {
-	   hidScanInput();
-	   if (hidKeysDown() & KEY_START)break;
-      gspWaitForVBlank();
-      if (audiobuf && !paused) {
-         if(frames >= 60) {
-            frames = 0;
-            int n = 0;
-            n = stb_vorbis_get_samples_short_interleaved(v, 2, audiobuf, Samples * 2);
-            if(n == 0) {
-                  stb_vorbis_close(v);
+	
+	
+	stb_vorbis_info info;
+	int error;
 
-               linearFree(audiobuf);
-               audiobuf = NULL;
-               v = NULL;
-               if (loop_flag) play_file_from_filename(currently_playing);
-            }
-            GSPGPU_FlushDataCache((u8*)audiobuf, audiobuf_size);
-            csndPlaySound(SOUND_CHANNEL(channel), SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_FORMAT_16BIT, Samples * 2, 10.0, 0.0, (u32*)audiobuf, (u32*)audiobuf, audiobuf_size);
 
-         }
-         frames++;
-      }
-	  gfxFlushBuffers();
-      gfxSwapBuffersGpu();
-   }
+      vorbisFile = stb_vorbis_open_filename("/mau5.ogg", &error, NULL);
+      info = stb_vorbis_get_info(vorbisFile);
+      Samples = info.sample_rate;
+   
+	
 
-   // Exit services
-   csndExit();
-   gfxExit();
-   //ptmExit();
-   hidExit();
-   aptExit();
-   srvExit();
-   return 0;
+	u32 *audioBuffer = (u32*)linearAlloc(Samples*sizeof(s16)*2);
+
+	bool fillBlock = false;
+
+	ndspInit();
+
+	ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+
+	ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
+	ndspChnSetRate(0, Samples);
+	ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+
+	float mix[12];
+	memset(mix, 0, sizeof(mix));
+	mix[0] = 1.0;
+	mix[1] = 1.0;
+	ndspChnSetMix(0, mix);
+
+	int note = 4;
+
+	memset(waveBuf,0,sizeof(waveBuf));
+	waveBuf[0].data_vaddr = &audioBuffer[0];
+	waveBuf[0].nsamples = Samples;
+	waveBuf[1].data_vaddr = &audioBuffer[Samples];
+	waveBuf[1].nsamples = Samples;
+
+	ndspChnWaveBufAdd(0, &waveBuf[0]);
+	ndspChnWaveBufAdd(0, &waveBuf[1]);
+
+	printf("Press up/down to change tone\n");
+
+	
+	
+	
+	
+	
+	
+	while(aptMainLoop()) {
+
+		gfxSwapBuffers();
+		gfxFlushBuffers();
+		gspWaitForVBlank();
+
+		hidScanInput();
+		u32 kDown = hidKeysDown();
+
+		if (kDown & KEY_START)
+			break; // break in order to return to hbmenu
+
+
+		if (waveBuf[fillBlock].status == NDSP_WBUF_DONE) {
+
+			fill_buffer(waveBuf[fillBlock].data_pcm16, waveBuf[fillBlock].nsamples);
+
+			ndspChnWaveBufAdd(0, &waveBuf[fillBlock]);
+
+			fillBlock = !fillBlock;
+		}
+	}
+
+	ndspExit();
+
+	linearFree(audioBuffer);
+
+	gfxExit();
+	return 0;
 }
